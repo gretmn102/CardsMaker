@@ -13,6 +13,7 @@ type EscapeOptions =
 type Card =
     {
         Location: int * int
+        Offset: int * int
         Scale: float
     }
 type Img =
@@ -24,12 +25,14 @@ type Img =
 
         // Rectangle: {| X:int; Y:int; Height:int; Width:int |}
         Cards: Card []
+        /// a negative value means nothing is selected
+        CurrentCardIdx: int
     }
-
+type ImgSrc = string
 type State =
     {
         InputImageSrc: string
-        ImageSrc: string
+        ImageSrc: ImgSrc
         Img:Img
     }
 
@@ -163,7 +166,7 @@ module Draw =
 module GraphicsEngine =
     let mutable fOffsetX, fOffsetY = 0., 0.
     let mutable fScaleX, fScaleY = 1., 1.
-
+    // -1 - 1
     let WorldToScreen (fWorldX, fWorldY) =
         let nScreenX = ((fWorldX - fOffsetX) * fScaleX)
         let nScreenY = ((fWorldY - fOffsetY) * fScaleY)
@@ -224,7 +227,6 @@ module GraphicsEngine =
             let fMouseWorldX_BeforeZoom, fMouseWorldY_BeforeZoom = ScreenToWorld(fMouseX, fMouseY)
 
             if qKeyHeld then
-                // printfn "%A" fScaleX
                 fScaleX <- fScaleX * 1.01
                 fScaleY <- fScaleY * 1.01
             if aKeyHeld then
@@ -240,7 +242,9 @@ module GraphicsEngine =
 
 
     let mutable (img:Img option) = None
-
+    let mutable isZoomToFit = false
+    let zoomToFit () =
+        isZoomToFit <- true
 
     let draw (canvas:Types.HTMLCanvasElement) =
         let canvasCtx = canvas.getContext_2d()
@@ -248,45 +252,97 @@ module GraphicsEngine =
         Mainloop.mainloop.setDraw (fun interpolationPercentage ->
             canvasCtx.clearRect(0., 0., canvas.width, canvas.height)
 
+            if isZoomToFit then
+                match img with
+                | Some img ->
+                    match img.Img with
+                    | Some img' ->
+                        let sw, sh = img'.width, img'.height
+                        if sw <> 0.0 && sh <> 0.0 then
+                            if img.CurrentCardIdx < 0 then
+                                fOffsetX <- 0.0; fOffsetY <- 0.0
+                                let dw, dh = canvas.width, canvas.height
+                                let ratio =
+                                    if sw > sh then
+                                        dw / sw
+                                    else
+                                        dh / sh
+                                fScaleX <- ratio; fScaleY <- ratio
+                            else
+                                let w, h = img.CardSize
+                                canvas.width <- float w; canvas.height <- float h
+
+                                let card = img.Cards.[img.CurrentCardIdx]
+                                let x, y = card.Offset
+                                fOffsetX <- float x; fOffsetY <- float y
+
+                                fScaleX <- card.Scale; fScaleY <- card.Scale
+                        isZoomToFit <- false
+                    | None -> ()
+                | None -> ()
+
+
             let fWorldLeft, fWorldTop = ScreenToWorld(0., 0.)
             let fWorldRight, fWorldBottom = ScreenToWorld(canvas.width, canvas.height)
 
             let gridColor = U3.Case1 "red"
-            // Вообще, если делать по уму, то сперва нужно разбить
+
             let shift = 10.
             let mutable cardsRenderedCount = 0
             match img with
             | Some img ->
                 match img.Img with
                 | Some img1 ->
-                    img.Cards
-                    |> Array.iter (fun card ->
-                        let sx, sy = card.Location
-                        let sx, sy = float sx, float sy
-                        let srcW, srcH = img.CardSize
-                        let srcW, srcH = float srcW, float srcH
+                    if img.CurrentCardIdx < 0 then
+                        img.Cards
+                        |> Array.iter (fun card ->
+                            let sx, sy =
+                                let sx, sy = card.Location
+                                float sx, float sy
+                            let srcW, srcH =
+                                let srcW, srcH = img.CardSize
+                                float srcW, float srcH
+
+                            let sx2, sy2 = sx + srcW, sy + srcH
+                            if ((fWorldLeft <= sx && sx <= fWorldRight)
+                                || (fWorldLeft <= sx2 && sx2 <= fWorldRight)
+                                || (fWorldLeft >= sx && sx2 >= fWorldRight))
+                               &&
+                               ((fWorldTop <= sy && sy <= fWorldBottom)
+                                || (fWorldTop <= sy2 && sy2 <= fWorldBottom)
+                                || (fWorldTop >= sy && sy2 >= fWorldBottom)) then
+
+                                cardsRenderedCount <- cardsRenderedCount + 1
+                                let f x = if x = 0.0 then x else x + shift
+
+                                let pixel_sx, pixel_sy = WorldToScreen(f sx, f sy)
+                                let pixel_ex, pixel_ey = WorldToScreen(sx2, sy2)
+
+                                let x, y =
+                                    let x, y = card.Offset
+                                    float x, float y
+
+                                canvasCtx.drawImage
+                                    (U3.Case1 img1, x, y, srcW / card.Scale, srcH / card.Scale,
+                                     pixel_sx, pixel_sy, pixel_ex - pixel_sx, pixel_ey - pixel_sy)
+                        )
+                    else
+                        let card = img.Cards.[img.CurrentCardIdx]
+                        let sx, sy =
+                            let sx, sy = card.Offset
+                            float sx, float sy
+                        let srcW, srcH =
+                            let srcW, srcH = img1.width, img1.height
+                            float srcW, float srcH
                         let sx2, sy2 = sx + srcW, sy + srcH
-                        if ((fWorldLeft <= sx && sx <= fWorldRight)
-                            || (fWorldLeft <= sx2 && sx2 <= fWorldRight)
-                            || (fWorldLeft >= sx && sx2 >= fWorldRight))
-                           &&
-                           ((fWorldTop <= sy && sy <= fWorldBottom)
-                            || (fWorldTop <= sy2 && sy2 <= fWorldBottom)
-                            || (fWorldTop >= sy && sy2 >= fWorldBottom)) then
 
-                            cardsRenderedCount <- cardsRenderedCount + 1
-                            let f x = if x = 0.0 then x else x + shift
+                        let pixel_sx, pixel_sy = WorldToScreen(sx, sy)
+                        let pixel_ex, pixel_ey = WorldToScreen(sx2, sy2)
 
-                            let pixel_sx, pixel_sy = WorldToScreen(f sx, f sy)
-                            let pixel_ex, pixel_ey = WorldToScreen(sx2, sy2)
-
-                            canvasCtx.drawImage
-                                (U3.Case1 img1, sx, sy, srcW, srcH,
-                                 pixel_sx, pixel_sy, pixel_ex - pixel_sx, pixel_ey - pixel_sy)
-                    )
+                        canvasCtx.drawImage
+                            (U3.Case1 img1, sx, sy, srcW, srcH,
+                             pixel_sx, pixel_sy, pixel_ex - pixel_sx, pixel_ey - pixel_sy)
                 | None -> ()
-
-                ()
             | None -> ()
             // let drawGrid gridEdgeWidth (cellWidth, cellHeight) =
             //     let lines size step count =
@@ -410,8 +466,6 @@ let init () =
         {
             InputImageSrc = ""
             ImageSrc = ""
-            // HorCardsCount = 1
-            // VerCardsCount = 1
             Img =
                 {
                     Img = None
@@ -419,6 +473,7 @@ let init () =
                     VerCardsCount = 1
                     CardSize = 0, 0
                     Cards = [||]
+                    CurrentCardIdx = -1
                 }
         }
     st, Cmd.none
@@ -434,6 +489,26 @@ let update (msg: Msg) (state: State) =
                 ImageSrc = state.InputImageSrc }
         state, Cmd.OfFunc.result (SetImage { state.Img with Img = None })
     | SetImage img ->
+        let img =
+            match GraphicsEngine.img with
+            | Some prevImg ->
+                if prevImg.CurrentCardIdx < 0 then
+                    img
+                else
+                    { img with
+                        Cards =
+                            let curr = img.Cards.[prevImg.CurrentCardIdx]
+                            let curr =
+                                { curr with
+                                    Offset = int GraphicsEngine.fOffsetX, int GraphicsEngine.fOffsetY
+                                    Scale = GraphicsEngine.fScaleX
+                                }
+                            img.Cards.[prevImg.CurrentCardIdx] <- curr
+                            img.Cards
+                    }
+            | None -> img
+
+        GraphicsEngine.zoomToFit()
         GraphicsEngine.img <- Some img
 
         let state = { state with Img = img }
@@ -445,9 +520,6 @@ let containerBox (state : State) (dispatch : Msg -> unit) =
                 prop.hidden true
                 prop.src state.ImageSrc
 
-                prop.onLoadedData (fun e ->
-                    printfn "onLoadedData %A" e
-                )
                 prop.ref (fun e ->
                     if isNull e then ()
                     else
@@ -471,6 +543,7 @@ let containerBox (state : State) (dispatch : Msg -> unit) =
                                         |> Array.map (fun (k, v) ->
                                             {
                                                 Location = v
+                                                Offset = v
                                                 Scale = 1.0
                                             }
                                         )
@@ -484,15 +557,27 @@ let containerBox (state : State) (dispatch : Msg -> unit) =
             Column.column [
             ] [
                 Html.canvas [
-                    let w, h = 640, 480
-                    prop.width w // img.width
-                    prop.height h // img.height
+                    prop.style [
+                        Feliz.style.border(1, borderStyle.solid, "red")
+                    ]
+                    let w, h = 556 - 10, 264 - 10
+                    prop.width w
+                    prop.height h
 
                     prop.tabIndex -1
                     prop.ref (fun x ->
-                        match x :?> Types.HTMLCanvasElement with
-                        | null -> ()
-                        | canvas ->
+                        if isNull x then ()
+                        else
+                            let canvas = x :?> Types.HTMLCanvasElement
+
+                            // canvas.width <- window.innerWidth
+                            // canvas.height <- window.innerHeight
+                            // canvas.width <- canvas.parentElement.offsetWidth
+                            // canvas.height <- canvas.parentElement.offsetHeight
+                            // canvas.width <- canvas.parentElement.scrollWidth
+                            // canvas.height <- canvas.parentElement.scrollHeight
+                            // canvas.width <- canvas.parentElement.clientWidth
+                            // canvas.height <- canvas.parentElement.clientHeight
                             GraphicsEngine.start canvas |> ignore
                     )
                 ]
@@ -559,6 +644,29 @@ let containerBox (state : State) (dispatch : Msg -> unit) =
                             Img = None
                             VerCardsCount = x }
                     )
+
+                let description = "Current card index"
+                Column.column [] [
+                    Html.div [ str description ]
+                    Control.p [ Control.IsExpanded ] [
+                        Input.number [
+                            Input.Placeholder description
+
+                            Input.Value (string state.Img.CurrentCardIdx)
+                            Input.OnChange (fun e ->
+                                match System.Int32.TryParse e.Value with
+                                | false, _ -> ()
+                                | true, x ->
+                                    if -1 <= x && x < state.Img.Cards.Length then
+                                        { state.Img
+                                            with
+                                                CurrentCardIdx = x }
+                                        |> SetImage
+                                        |> dispatch
+                            )
+                        ]
+                    ]
+                ]
             ]
         ]
     ]
