@@ -519,7 +519,8 @@ let containerBox (state : State) (dispatch : Msg -> unit) =
             Html.img [
                 prop.hidden true
                 prop.src state.ImageSrc
-
+                // prop.crossOrigin.anonymous
+                prop.custom("crossOrigin", "anonymous")
                 prop.ref (fun e ->
                     if isNull e then ()
                     else
@@ -664,6 +665,54 @@ let containerBox (state : State) (dispatch : Msg -> unit) =
                                         |> SetImage
                                         |> dispatch
                             )
+                        ]
+                    ]
+                ]
+
+                Column.column [] [
+                    Control.p [] [
+                        Button.button [
+                            Button.OnClick (fun e ->
+                                match state.Img.Img with
+                                | Some img1 ->
+                                    let canvas = document.createElement "canvas" :?> Types.HTMLCanvasElement
+                                    let ctx = canvas.getContext_2d()
+                                    canvas.width <- img1.width
+                                    canvas.height <- img1.height
+
+                                    state.Img.Cards
+                                    |> Array.iter (fun card ->
+                                        let sx, sy =
+                                            let sx, sy = card.Location
+                                            float sx, float sy
+                                        let srcW, srcH =
+                                            let srcW, srcH = state.Img.CardSize
+                                            float srcW, float srcH
+
+                                        let sx2, sy2 = sx + srcW, sy + srcH
+
+                                        let pixel_sx, pixel_sy = sx, sy
+                                        let pixel_ex, pixel_ey = sx2, sy2
+
+                                        let x, y =
+                                            let x, y = card.Offset
+                                            float x, float y
+
+                                        ctx.drawImage
+                                            (U3.Case1 img1, x, y, srcW / card.Scale, srcH / card.Scale,
+                                             pixel_sx, pixel_sy, pixel_ex - pixel_sx, pixel_ey - pixel_sy)
+                                    )
+
+                                    let a = document.createElement "a" :?> Types.HTMLAnchorElement
+                                    a.href <- canvas.toDataURL("image/png")
+                                    a.setAttribute("download", "output.png")
+                                    a.click()
+                                    a.remove()
+                                    canvas.remove()
+                                | None -> ()
+                            )
+                        ] [
+                            Fa.i [ Fa.Solid.Download ] []
                         ]
                     ]
                 ]
